@@ -1,90 +1,79 @@
-import requests, os
+import os
+import requests
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Render-এর Environment Variable থেকে তথ্য নেওয়া
-TOKEN = os.environ.get("BOT_TOKEN")
+TELEGRAM_TOKEN = os.environ.get("BOT_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 PORT = int(os.environ.get("PORT", 8000))
-last_song = {}
 
-# Render-এর পোর্ট এরর বা টাইমআউট দূর করার জন্য ডামি ওয়েব সার্ভার
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+        self.wfile.write(b"AI Bot is alive and kicking!")
 
 def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthCheckHandler)
     print(f"Web server started on port {PORT}")
     server.serve_forever()
 
-def get_full_lyrics(song_name):
+def ask_gemini_ai(user_message):
+    if not GEMINI_API_KEY:
+        return "ভুল: সার্ভারে Gemini API Key সেট করা নেই! অনুগ্রহ করে Render-এর Environment ভ্যারিয়েবলে GEMINI_API_KEY যোগ করুন।"
+        
+    url = f"https://googleapis.com{GEMINI_API_KEY}"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": (
+                    f"তুমি একটি বন্ধুত্বপূর্ণ ও অত্যন্ত বুদ্ধিমান বাংলা এআই টেলিগ্রাম বট। "
+                    f"তুমি ব্যবহারকারীদের খুব বিনম্র ও সুন্দরভাবে বাংলায় উত্তর দেবে। "
+                    f"ইউজার তোমাকে গান, লিরিক্স, গল্প, সাধারণ জ্ঞান, রেসিপি যা-ই জিজ্ঞেস করুক, "
+                    f"তুমি আসল ChatGPT বা Gemini এআই-এর মতো গুছিয়ে চমৎকার উত্তর দেবে। "
+                    f"ইউজারের মেসেজটি হলো: {user_message}"
+                )
+            }]
+        }]
+    }
+    
     try:
-        # লিরিক্স ওভিএইচ (Lyrics.ovh) এর অফিশিয়াল গ্লোবাল এবং সঠিক লিংক ফরম্যাট
-        url = f"https://lyrics.ovh{song_name}"
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            return res.json().get('lyrics')
-        return None
-    except: 
-        return None
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code == 200:
+            ai_text = response.json()['candidates']['content']['parts']['text']
+            return ai_text
+        else:
+            return "দুঃখিত, এআই সার্ভার থেকে এই মুহূর্তে কোনো সাড়া পাওয়া যাচ্ছে না। একটু পরে আবার চেষ্টা করুন। 😢"
+    except Exception as e:
+        return "দুঃখিত, নেটওয়ার্কের সমস্যার কারণে এআই উত্তর দিতে পারছে না। 😢"
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global last_song
+async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
+        
+    user_text = update.message.text
     chat_id = update.message.chat_id
-    text = update.message.text.lower()
     
-    if "ফুল" in text or "পুরা" in text:
-        if chat_id in last_song:
-            song_name = last_song[chat_id]
-            await update.message.reply_text("একটু দাঁড়াও, ফুল গান আনতেছি... 🎵")
-            lyrics = get_full_lyrics(song_name)
-            if lyrics: 
-                await update.message.reply_text(f"🎵 {song_name} 🎵\n\n{lyrics}")
-            else:
-                await update.message.reply_text("দুঃখিত, এই গানের ফুল লিরিক্স খুঁজে পাওয়া যায়নি। 😢")
-        else:
-            await update.message.reply_text("আগে আমাকে বলো কোন গানটি শুনবে? যেমন: `গান শুনাও তুমি হাসলে`")
-            
-    elif "গান শুনাও" in text:
-        song_name = text.replace("গান শুনাও", "").strip()
-        if song_name == "": 
-            song_name = "তুমি হাসলে"
-        
-        last_song[chat_id] = song_name
-        await update.message.reply_text(f"একটু দাঁড়াও, '{song_name}' গানটা খুঁজতেছি... 🔍")
-        
-        lyrics = get_full_lyrics(song_name)
-        if lyrics:
-            lines = [line for line in lyrics.split("\n") if line.strip()]
-            short_lyrics = "\n".join(lines[:2])
-            await update.message.reply_text(
-                f"🎵 {song_name} 🎵\n\n{short_lyrics}\n\n"
-                f"বাকি অংশ বা ফুল গান লাগলে বলো: `ফুল গান` বা `পুরা গান`"
-            )
-        else:
-            await update.message.reply_text(f"দুঃখিত, '{song_name}' গানের লিরিক্স ডাটাবেজে পাওয়া যায়নি। 😢")
-    else:
-        await update.message.reply_text("আমাকে গান খুঁজতে বলতে লিখুন: `গান শুনাও [গানের নাম]`\nযেমন: `গান শুনাও তুমি হাসলে`")
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    ai_reply = ask_gemini_ai(user_text)
+    await update.message.reply_text(ai_reply)
 
 def main():
-    if not TOKEN:
-        print("Error: BOT_TOKEN is missing!")
+    if not TELEGRAM_TOKEN:
+        print("Error: BOT_TOKEN environment variable is missing!")
         return
 
-    # ব্যাকগ্রাউন্ডে ডামি ওয়েব সার্ভার চালু করা যাতে Render পোর্ট খুঁজে পায় এবং ফ্রি সার্ভিস সচল থাকে
     server_thread = Thread(target=run_web_server, daemon=True)
     server_thread.start()
 
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("Bot is starting...")
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
+    
+    print("AI Bot is running...")
     app.run_polling()
 
 if __name__ == '__main__':
